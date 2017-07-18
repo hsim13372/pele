@@ -108,7 +108,7 @@ class NEB(object):
 
         self.getEnergyCount = 0
         self.printStateFile = None
-        self.iprint = -1
+        self.iprint = 1
         self.save_energies = save_energies
 
         self.quenchRoutine = quenchRoutine
