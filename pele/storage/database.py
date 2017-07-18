@@ -5,6 +5,8 @@ import os
 
 import numpy as np
 
+from scipy.linalg import eig
+
 from sqlalchemy import create_engine, and_, or_
 from sqlalchemy.orm import sessionmaker, undefer
 from sqlalchemy import Column, Integer, Float, PickleType, String
@@ -15,7 +17,7 @@ from sqlalchemy.schema import Index
 
 from pele.utils.events import Signal
 
-__all__ = ["Minimum", "TransitionState", "Database"]
+__all__ = ["Minimum", "Maximum", "SaddlePoint", "TransitionState", "Database"]
 
 _schema_version = 2
 verbose=False
@@ -103,7 +105,61 @@ class Minimum(Base):
         return _id
 
 #    transition_states = relationship("transition_states", order_by="transition_states.id", backref="minima")
+
+class Maximum(Base):
+    """The Maximum class represents a maximum in the database.
+
+    Implemented by hannahsim (may not work...)
+
+    Parameters
+    ----------
+    energy : float
+    coords : numpy array
+        coordinates
+
+    Attributes
+    ----------
+    energy :
+        the energy of the maximum
+    coords :
+        the coordinates of the maximum.  This is stored as a pickled numpy
+        array which SQL interprets as a BLOB.
+
+    Notes
+    -----
+    Use Database.addMaximum to create a Maximum object.
+    """
+    __tablename__ = 'tbl_maxima'
+
+    _id = Column(Integer, primary_key=True)
+    energy = Column(Float) 
+    # deferred means the object is loaded on demand, that saves some time / memory for huge graphs
+    coords = deferred(Column(PickleType))
+    '''coordinates of the minimum'''
     
+    def __init__(self, energy, coords):
+        self.energy = energy
+        self.coords = np.copy(coords)
+
+    def id(self):
+        """return the sql id of the object"""
+        return self._id
+
+    def __eq__(self, m):
+        """m can be integer or Maxima object"""
+        assert self.id() is not None
+        if isinstance(m, Maximum):
+            assert m.id() is not None
+            return self.id() == m.id()
+        else:
+            return self.id() == m
+        
+    def __hash__(self):
+        _id = self.id()
+        assert _id is not None
+        return _id
+    
+
 class TransitionState(Base):
     """Transition state object
 
@@ -226,6 +282,71 @@ class TransitionState(Base):
         """return the sql id of the object"""
         return self._id
 
+
+class SaddlePoint(Base):
+    """Saddle Point Class
+
+    The SaddlePoint class represents a more general class to store data on
+    transition states (not necessarily with 2 minima associated) and higher order 
+    saddle points. This will include the transition states (order-one saddle points)
+    to keep track of all types of stationary points.
+
+    Implemented by hannahsim (may not work...)
+
+    Parameters
+    ----------
+    energy : float
+    coords : numpy array
+        coordinates of saddle poit
+    hessian : 
+        numerical hessian at saddle point coordinates
+
+    Attributes
+    ----------
+    energy :
+        The energy of the saddle point
+    coords :
+        The coordinates of the saddle point. This is stored as a pickled numpy
+        array which SQL interprets as a BLOB.
+    hessian :
+        numerical hessian at the saddle point coordinates.
+        This is stored as a pickled numpy
+        array which SQL interprets as a BLOB.
+    order :
+        The order associated with the saddle point 
+        i.e. number of negative eigenvalues of Hessian.
+    eigenvals :
+        The eigenvalues of the hessian.
+    cond_num : 
+        condition number 
+        i.e. log_{10} \frac{max(eig(hessian))}{min(eig(hessian))}
+
+    Notes
+    -----
+    Use Database.addSaddlePoint to create a SaddlePoint object.
+    """
+    __tablename__ = "tbl_saddle_points"
+    _id = Column(Integer, primary_key=True)
+    energy = Column(Float)
+    eq_tolerance = Column(Float)
+    coords = deferred(Column(PickleType))
+    hessian = deferred(Column(PickleType))
+    eigenvals = Column(Float)
+    order = Column(Integer)
+    cond_num = Column(Float)
+
+    def __init__(self, energy, coords, hessian, eq_tolerance=1e-12):
+        self.energy = energy
+        self.coords = np.copy(coords)
+        self.hessian = np.copy(hessian)
+        self.eq_tolerance = eq_tolerance
+        self.eigvals, _ = eig(self.hessian)
+        self.order = sum(1 for i in self.eigvals if i < self.eq_tolerance)
+        self.cond_num = np.log10(np.max(self.eigvals)/np.min(self.eigvals))
+
+    def id(self):
+        """return the sql id of the object"""
+        return self._id
 
 
 class SystemProperty(Base):
@@ -437,12 +558,16 @@ class Database(object):
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
         
-        # these functions will be called when a minimum or transition state is 
-        # added or removed
+        # these functions will be called when a minimum, maximum, transition state, or 
+        # saddle point is added or removed
         self.on_minimum_added = Signal()
         self.on_minimum_removed = Signal()
+        self.on_maximum_added = Signal()
+        self.on_maximum_removed = Signal()
         self.on_ts_added = Signal()
         self.on_ts_removed = Signal()
+        self.on_sp_added = Signal()
+        self.on_sp_removed = Signal()
         
         self.lock = threading.Lock()
         self.connection = self.engine.connect()
@@ -488,7 +613,7 @@ class Database(object):
         candidates = self.session.query(Minimum).order_by(Minimum.energy).\
             limit(1).all()
         return candidates[0]
-    
+
     def findMinimum(self, E, coords):
         candidates = self.session.query(Minimum).\
             options(undefer("coords")).\
@@ -569,7 +694,50 @@ class Database(object):
     def getMinimum(self, mid):
         """return the minimum with a given id"""
         return self.session.query(Minimum).get(mid)
+
+    def addMaximum(self, E, coords, commit=True):
+        """add a new maximum to database
         
+        Parameters
+        ----------
+        E : float
+        coords : numpy.array
+            coordinates of the maximum
+        commit : bool, optional
+            commit changes to database
+    
+        Returns
+        -------
+        maximum : Maximum
+            maximum which was added (not necessarily a new maximum)
+            
+        """
+        self.lock.acquire()
+        # undefer coords because
+        # it is slow to load them individually by accessing the database repetitively.
+        candidates = self.session.query(Maximum).\
+            options(undefer("coords")).\
+            filter(Maximum.energy.between(E-self.accuracy, E+self.accuracy))
+        
+        new = Maximum(E, coords)
+        
+        for m in candidates:
+            self.lock.release()
+            return m
+
+        self.session.add(new)
+        if commit:
+            self.session.commit()
+        
+        self.lock.release()
+        
+        self.on_maximum_added(new)
+        return new
+        
+    def getMaximum(self, mid):
+        """return the maximum with a given id"""
+        return self.session.query(Maximum).get(mid)
+
     def addTransitionState(self, energy, coords, min1, min2, commit=True, 
                            eigenval=None, eigenvec=None, pgorder=None, fvib=None):
         """Add transition state object
@@ -658,6 +826,46 @@ class Database(object):
     def getTransitionStateFromID(self, id_):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
+
+    def addSaddlePoint(self, energy, coords, hessian, eq_tolerance=1e-12, commit=True):
+        """Add transition state object
+        
+        Parameters
+        ----------
+        energy : float
+            energy of saddle point
+        coords : numpy array
+            coordinates of saddle point
+        hessian : numpy array
+            numerical hessian array at saddle point coords
+        commit : bool
+            commit changes to sql database
+        
+        Returns
+        -------
+        sp : SaddlePoint
+            the saddle point object (not necessarily new)
+        """
+        candidates = self.session.query(SaddlePoint).\
+            options(undefer("coords")).\
+            filter(SaddlePoint.energy.between(energy-self.accuracy, energy+self.accuracy))
+        
+        for m in candidates:
+            return m
+
+        new = SaddlePoint(energy, coords, hessian, eq_tolerance)
+        
+        self.session.add(new)
+        if commit:
+            self.session.commit()
+        self.on_sp_added(new)
+        return new
+
+
+    def getSaddlePointFromID(self, id_):
+        """return the saddle point with id id_"""
+        return self.session.query(SaddlePoint).get(id_)
+
     
     def minima(self, order_energy=True):
         """return an iterator over all minima in database
@@ -678,6 +886,14 @@ class Database(object):
             return self.session.query(Minimum).order_by(Minimum.energy).all()
         else:
             return self.session.query(Minimum).all()
+
+    def maxima(self, order_energy=True):
+        """return an iterator over all maxima in database
+        """
+        if order_energy:
+            return self.session.query(Maximum).order_by(Maximum.energy).all()
+        else:
+            return self.session.query(Maximum).all()
     
     def transition_states(self, order_energy=False):
         """return an iterator over all transition states in database
@@ -686,6 +902,14 @@ class Database(object):
             return self.session.query(TransitionState).order_by(TransitionState.energy).all()
         else:
             return self.session.query(TransitionState).all()
+
+    def saddle_points(self, order_energy=False):
+        """return an iterator over all saddle point in database
+        """
+        if order_energy:
+            return self.session.query(SaddlePoint).order_by(SaddlePoint.energy).all()
+        else:
+            return self.session.query(SaddlePoint).all()
     
     def minimum_adder(self, Ecut=None, max_n_minima=None, commit_interval=1):
         """wrapper class to add minima
@@ -762,11 +986,27 @@ class Database(object):
         self.session.delete(min2)
         self.session.commit()
 
+    def remove_maximum(self, m, commit=True):
+        """remove a maximum from the database
+        """
+        self.on_maximum_removed(m)
+        self.session.delete(m)
+        if commit:
+            self.session.commit()
+
     def remove_transition_state(self, ts, commit=True):
         """remove a transition states from the database
         """
         self.on_ts_removed(ts)
         self.session.delete(ts)
+        if commit:
+            self.session.commit()
+
+    def remove_saddle_point(self, sp, commit=True):
+        """remove a saddle point from the database
+        """
+        self.on_sp_removed(sp)
+        self.session.delete(sp)
         if commit:
             self.session.commit()
 
@@ -781,6 +1021,11 @@ class Database(object):
         """
         return self.session.query(Minimum).count()
 
+    def number_of_maxima(self):
+        """return the number of maxima in the database
+        """
+        return self.session.query(Maximum).count()
+
     def number_of_transition_states(self):
         """return the number of transition states in the database
         
@@ -793,6 +1038,11 @@ class Database(object):
         number_of_minima
         """
         return self.session.query(TransitionState).count()
+
+    def number_of_saddle_points(self):
+        """return the number of saddle points in the database
+        """
+        return self.session.query(SaddlePoint).count()
 
     def get_property(self, property_name):
         """return the minimum with a given name"""
