@@ -5,8 +5,6 @@ import os
 
 import numpy as np
 
-from scipy.linalg import eig
-
 from sqlalchemy import create_engine, and_, or_
 from sqlalchemy.orm import sessionmaker, undefer
 from sqlalchemy import Column, Integer, Float, PickleType, String
@@ -33,6 +31,8 @@ class Minimum(Base):
     energy : float
     coords : numpy array
         coordinates
+    eigvalues : numpy array (optional)
+        eigenvalues
 
     Attributes
     ----------
@@ -53,7 +53,8 @@ class Minimum(Base):
         Space to store anything that the user wants.  This is stored in SQL
         as a BLOB, so you can put anything here you want as long as it's serializable.
         Usually a dictionary works best.
-
+    eigvalues :
+        eigenvalues of the numerical hessian at the minimum. 
 
     Notes
     -----
@@ -79,12 +80,14 @@ class Minimum(Base):
     """flag indicating if the minimum is invalid"""
     user_data = deferred(Column(PickleType))
     """this can be used to store information about the minimum"""
-    
-    
-    def __init__(self, energy, coords):
+    eigvalues = deferred(Column(PickleType))
+
+
+    def __init__(self, energy, coords, eigvalues=None):
         self.energy = energy
         self.coords = np.copy(coords)
         self.invalid = False
+        self.eigvalues = np.copy(eigvalues)
 
     def id(self):
         """return the sql id of the object"""
@@ -116,6 +119,8 @@ class Maximum(Base):
     energy : float
     coords : numpy array
         coordinates
+    eigvalues : numpy array
+        eigenvalues
 
     Attributes
     ----------
@@ -124,6 +129,9 @@ class Maximum(Base):
     coords :
         the coordinates of the maximum.  This is stored as a pickled numpy
         array which SQL interprets as a BLOB.
+    eigvalues:
+        the eigenvalues of the numerical hessian at the maximum. This is stored 
+        as a pickled numpy array which SQL interprets as a BLOB.
 
     Notes
     -----
@@ -135,11 +143,14 @@ class Maximum(Base):
     energy = Column(Float) 
     # deferred means the object is loaded on demand, that saves some time / memory for huge graphs
     coords = deferred(Column(PickleType))
-    '''coordinates of the minimum'''
+    '''coordinates of the maximum'''
+    eigvalues = deferred(Column(PickleType))
+    '''eigvalues of the hessian at maximum'''
     
-    def __init__(self, energy, coords):
+    def __init__(self, energy, coords, eigvalues):
         self.energy = energy
         self.coords = np.copy(coords)
+        self.eigvalues = np.copy(eigvalues)
 
     def id(self):
         """return the sql id of the object"""
@@ -298,8 +309,8 @@ class SaddlePoint(Base):
     energy : float
     coords : numpy array
         coordinates of saddle poit
-    hessian : 
-        numerical hessian at saddle point coordinates
+    eigvalues : 
+        eigenvalues of the numerical hessian at saddle point coordinates
 
     Attributes
     ----------
@@ -307,10 +318,6 @@ class SaddlePoint(Base):
         The energy of the saddle point
     coords :
         The coordinates of the saddle point. This is stored as a pickled numpy
-        array which SQL interprets as a BLOB.
-    hessian :
-        numerical hessian at the saddle point coordinates.
-        This is stored as a pickled numpy
         array which SQL interprets as a BLOB.
     order :
         The order associated with the saddle point 
@@ -330,19 +337,17 @@ class SaddlePoint(Base):
     energy = Column(Float)
     eq_tolerance = Column(Float)
     coords = deferred(Column(PickleType))
-    hessian = deferred(Column(PickleType))
-    eigenvals = Column(Float)
+    eigvalues = deferred(Column(PickleType))
     order = Column(Integer)
     cond_num = Column(Float)
 
-    def __init__(self, energy, coords, hessian, eq_tolerance=1e-12):
+    def __init__(self, energy, coords, eigvalues, eq_tolerance=1e-12):
         self.energy = energy
         self.coords = np.copy(coords)
-        self.hessian = np.copy(hessian)
         self.eq_tolerance = eq_tolerance
-        self.eigvals, _ = eig(self.hessian)
-        self.order = sum(1 for i in self.eigvals if i < self.eq_tolerance)
-        self.cond_num = np.log10(np.max(self.eigvals)/np.min(self.eigvals))
+        self.eigvalues = np.copy(eigvalues)
+        self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < self.eq_tolerance)
+        self.cond_num = np.log10(np.max(self.eigvalues)/np.min(self.eigvalues))
 
     def id(self):
         """return the sql id of the object"""
@@ -423,14 +428,14 @@ class MinimumAdder(object):
         self.commit_interval = commit_interval
         self.count = 0
 
-    def __call__(self, E, coords):
+    def __call__(self, E, coords, eigvalues=None):
         """this is called to add a minimum to the database"""
         if self.Ecut is not None:
             if E > self.Ecut:
                 return None
         commit = self.count % self.commit_interval == 0
         self.count += 1
-        return self.db.addMinimum(E, coords, max_n_minima=self.max_n_minima, 
+        return self.db.addMinimum(E, coords, eigvalues=eigvalues, max_n_minima=self.max_n_minima, 
                                   commit=commit)
     
     def __del__(self):
@@ -629,7 +634,7 @@ class Database(object):
             return m
         return None
         
-    def addMinimum(self, E, coords, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
+    def addMinimum(self, E, coords, eigvalues=None, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
         """add a new minimum to database
         
         Parameters
@@ -637,6 +642,8 @@ class Database(object):
         E : float
         coords : numpy.array
             coordinates of the minimum
+        eigvalues : numpy array
+            eigvalues of hessian at minimum
         commit : bool, optional
             commit changes to database
         max_n_minima : int, optional
@@ -658,7 +665,7 @@ class Database(object):
             options(undefer("coords")).\
             filter(Minimum.energy.between(E-self.accuracy, E+self.accuracy))
         
-        new = Minimum(E, coords)
+        new = Minimum(E, coords, eigvalues=eigvalues)
         
         for m in candidates:
             if self.compareMinima:
@@ -695,7 +702,7 @@ class Database(object):
         """return the minimum with a given id"""
         return self.session.query(Minimum).get(mid)
 
-    def addMaximum(self, E, coords, commit=True):
+    def addMaximum(self, E, coords, eigvalues, commit=True):
         """add a new maximum to database
         
         Parameters
@@ -703,6 +710,8 @@ class Database(object):
         E : float
         coords : numpy.array
             coordinates of the maximum
+        eigvalues : numpy.array
+            eigvalues of numerical hessian at coords
         commit : bool, optional
             commit changes to database
     
@@ -719,7 +728,7 @@ class Database(object):
             options(undefer("coords")).\
             filter(Maximum.energy.between(E-self.accuracy, E+self.accuracy))
         
-        new = Maximum(E, coords)
+        new = Maximum(E, coords, eigvalues)
         
         for m in candidates:
             self.lock.release()
@@ -827,7 +836,7 @@ class Database(object):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
 
-    def addSaddlePoint(self, energy, coords, hessian, eq_tolerance=1e-12, commit=True):
+    def addSaddlePoint(self, energy, coords, eigvalues, eq_tolerance=1e-12, commit=True):
         """Add transition state object
         
         Parameters
@@ -836,8 +845,8 @@ class Database(object):
             energy of saddle point
         coords : numpy array
             coordinates of saddle point
-        hessian : numpy array
-            numerical hessian array at saddle point coords
+        eigvalues : numpy array
+            eigvalues of numerical hessian at saddle point coords
         commit : bool
             commit changes to sql database
         
@@ -853,7 +862,7 @@ class Database(object):
         for m in candidates:
             return m
 
-        new = SaddlePoint(energy, coords, hessian, eq_tolerance)
+        new = SaddlePoint(energy, coords, eigvalues, eq_tolerance)
         
         self.session.add(new)
         if commit:
