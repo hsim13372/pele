@@ -50,7 +50,8 @@ class BasinHopping(MonteCarlo):
     """
 
     def __init__(self, coords, potential, takeStep, storage=None, event_after_step=None, acceptTest=None,
-                 temperature=1.0, quench=None, confCheck=None, outstream=sys.stdout, insert_rejected=False):
+                 temperature=1.0, quench=None, confCheck=None, outstream=sys.stdout, insert_rejected=False,
+                 printfrq=10):
         #########################################################################
         # initialize MonteCarlo base class
         #########################################################################
@@ -88,6 +89,8 @@ class BasinHopping(MonteCarlo):
         
         self.result.energy = self.markovE
         self.result.coords = self.coords.copy()
+
+        self.printfrq = printfrq
 
 
     def _mcStep(self):
