@@ -836,12 +836,12 @@ class Database(object):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
 
-    def addSaddlePoint(self, energy, coords, eigvalues, eq_tolerance=1e-12, commit=True):
+    def addSaddlePoint(self, E, coords, eigvalues, eq_tolerance=1e-12, commit=True):
         """Add transition state object
         
         Parameters
         ----------
-        energy : float
+        E : float
             energy of saddle point
         coords : numpy array
             coordinates of saddle point
@@ -857,12 +857,12 @@ class Database(object):
         """
         candidates = self.session.query(SaddlePoint).\
             options(undefer("coords")).\
-            filter(SaddlePoint.energy.between(energy-self.accuracy, energy+self.accuracy))
+            filter(SaddlePoint.energy.between(E-self.accuracy, E+self.accuracy))
         
         for m in candidates:
             return m
 
-        new = SaddlePoint(energy, coords, eigvalues, eq_tolerance)
+        new = SaddlePoint(E, coords, eigvalues, eq_tolerance)
         
         self.session.add(new)
         if commit:
