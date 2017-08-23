@@ -347,7 +347,7 @@ class SaddlePoint(Base):
         self.eq_tolerance = eq_tolerance
         self.eigvalues = np.copy(eigvalues)
         self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < self.eq_tolerance)
-        self.cond_num = np.log10(np.max(self.eigvalues)/np.min(self.eigvalues))
+        self.cond_num = np.log10(abs(np.max(self.eigvalues))/abs(np.min(self.eigvalues)))
 
     def id(self):
         """return the sql id of the object"""
