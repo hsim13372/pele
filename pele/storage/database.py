@@ -55,6 +55,8 @@ class Minimum(Base):
         Usually a dictionary works best.
     eigvalues :
         eigenvalues of the numerical hessian at the minimum. 
+    freq_counter : 
+        number of times minimum is reached during basin hopping.
 
     Notes
     -----
@@ -81,13 +83,15 @@ class Minimum(Base):
     user_data = deferred(Column(PickleType))
     """this can be used to store information about the minimum"""
     eigvalues = deferred(Column(PickleType))
+    freq_counter = Column(Integer)
 
 
-    def __init__(self, energy, coords, eigvalues=None):
+    def __init__(self, energy, coords, eigvalues=None, freq_counter=0):
         self.energy = energy
         self.coords = np.copy(coords)
         self.invalid = False
         self.eigvalues = np.copy(eigvalues)
+        self.freq_counter = freq_counter
 
     def id(self):
         """return the sql id of the object"""
@@ -460,9 +464,7 @@ def _compare_properties(prop, v2):
     print "warning, could not compare value", v2, "with", v1
     return False
         
-    
-        
-            
+
         
         
         
@@ -634,7 +636,7 @@ class Database(object):
             return m
         return None
         
-    def addMinimum(self, E, coords, eigvalues=None, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
+    def addMinimum(self, E, coords, eigvalues=None, freq_counter=0, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
         """add a new minimum to database
         
         Parameters
@@ -665,10 +667,13 @@ class Database(object):
             options(undefer("coords")).\
             filter(Minimum.energy.between(E-self.accuracy, E+self.accuracy))
         
-        new = Minimum(E, coords, eigvalues=eigvalues)
+        new = Minimum(E, coords, eigvalues=eigvalues, freq_counter=freq_counter)
         
         for m in candidates:
-            if self.compareMinima:
+            if self.compareMinima: # if callable given
+                if self.compareMinima(new, m): # if 2 minima equivalent
+                    m.freq_counter += 1
+                    self.session.commit()
                 if not self.compareMinima(new, m):
                     continue
             self.lock.release()
@@ -847,6 +852,8 @@ class Database(object):
             coordinates of saddle point
         eigvalues : numpy array
             eigvalues of numerical hessian at saddle point coords
+        eq_tolerance : float
+            value to consider zero
         commit : bool
             commit changes to sql database
         
