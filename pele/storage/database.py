@@ -735,7 +735,7 @@ class Database(object):
             options(undefer("coords")).\
             filter(Maximum.energy.between(E-self.accuracy, E+self.accuracy))
         
-        new = Maximum(E, coords, eigvalues)
+        new = Maximum(E, coords, eigvalues, freq_counter=freq_counter)
 
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
@@ -871,14 +871,14 @@ class Database(object):
             options(undefer("coords")).\
             filter(SaddlePoint.energy.between(E-self.accuracy, E+self.accuracy))
         
+        new = SaddlePoint(E, coords, eigvalues, eq_tolerance, freq_counter=freq_counter)
+
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
                 if self.compareMinima(new, m): 
                     m.freq_counter += 1
             self.lock.release()
             return m
-
-        new = SaddlePoint(E, coords, eigvalues, eq_tolerance)
         
         self.session.add(new)
         if commit:
