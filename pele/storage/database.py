@@ -150,11 +150,13 @@ class Maximum(Base):
     '''coordinates of the maximum'''
     eigvalues = deferred(Column(PickleType))
     '''eigvalues of the hessian at maximum'''
+    freq_counter = Column(Integer)
     
-    def __init__(self, energy, coords, eigvalues):
+    def __init__(self, energy, coords, eigvalues, freq_counter=0):
         self.energy = energy
         self.coords = np.copy(coords)
         self.eigvalues = np.copy(eigvalues)
+        self.freq_counter = freq_counter
 
     def id(self):
         """return the sql id of the object"""
@@ -273,6 +275,7 @@ class TransitionState(Base):
     """flag indicating if the transition state is invalid"""
     user_data = deferred(Column(PickleType))
     """this can be used to store information about the transition state """
+    freq_counter = Column(Integer)
 
 
     def __init__(self, energy, coords, min1, min2, eigenval=None, eigenvec=None):
@@ -344,14 +347,16 @@ class SaddlePoint(Base):
     eigvalues = deferred(Column(PickleType))
     order = Column(Integer)
     cond_num = Column(Float)
+    freq_counter = Column(Integer)
 
-    def __init__(self, energy, coords, eigvalues, eq_tolerance=1e-12):
+    def __init__(self, energy, coords, eigvalues, eq_tolerance=1e-12, freq_counter=0):
         self.energy = energy
         self.coords = np.copy(coords)
         self.eq_tolerance = eq_tolerance
         self.eigvalues = np.copy(eigvalues)
         self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < self.eq_tolerance)
         self.cond_num = np.log10(abs(np.max(self.eigvalues))/abs(np.min(self.eigvalues)))
+        self.freq_counter = freq_counter
 
     def id(self):
         """return the sql id of the object"""
@@ -463,9 +468,6 @@ def _compare_properties(prop, v2):
     
     print "warning, could not compare value", v2, "with", v1
     return False
-        
-
-        
         
         
 
@@ -673,7 +675,7 @@ class Database(object):
             if self.compareMinima: # if callable given
                 if self.compareMinima(new, m): # if 2 minima equivalent
                     m.freq_counter += 1
-                    self.session.commit()
+                    #self.session.commit()
                 if not self.compareMinima(new, m):
                     continue
             self.lock.release()
@@ -707,7 +709,7 @@ class Database(object):
         """return the minimum with a given id"""
         return self.session.query(Minimum).get(mid)
 
-    def addMaximum(self, E, coords, eigvalues, commit=True):
+    def addMaximum(self, E, coords, eigvalues, freq_counter=0, commit=True):
         """add a new maximum to database
         
         Parameters
@@ -734,8 +736,11 @@ class Database(object):
             filter(Maximum.energy.between(E-self.accuracy, E+self.accuracy))
         
         new = Maximum(E, coords, eigvalues)
-        
+
         for m in candidates:
+            if self.compareMinima: # misleading because not minima...
+                if self.compareMinima(new, m): 
+                    m.freq_counter += 1
             self.lock.release()
             return m
 
@@ -841,7 +846,7 @@ class Database(object):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
 
-    def addSaddlePoint(self, E, coords, eigvalues, eq_tolerance=1e-12, commit=True):
+    def addSaddlePoint(self, E, coords, eigvalues, freq_counter=0, eq_tolerance=1e-12, commit=True):
         """Add transition state object
         
         Parameters
@@ -867,6 +872,10 @@ class Database(object):
             filter(SaddlePoint.energy.between(E-self.accuracy, E+self.accuracy))
         
         for m in candidates:
+            if self.compareMinima: # misleading because not minima...
+                if self.compareMinima(new, m): 
+                    m.freq_counter += 1
+            self.lock.release()
             return m
 
         new = SaddlePoint(E, coords, eigvalues, eq_tolerance)
