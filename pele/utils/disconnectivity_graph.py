@@ -1146,6 +1146,40 @@ class DisconnectivityGraph(object):
 
         axes.scatter(xpos, energies, **kwargs)
 
+
+    def plot_by_line(self, linewidth=0.5, axes=None, title=None):
+        """Draw disconnectivity graph line by line. Slower but easier
+            to change/control.
+
+        Need to call calculate() first
+
+        and call plt.show() to see plot
+        """
+        import matplotlib.pyplot as plt
+
+        self.line_segments, self.line_colours = self._get_line_segments(self.tree_graph, eoffset=self.eoffset)
+
+        if axes is not None:
+            ax = axes
+        else:
+            try:
+                ax = self.axes
+            except AttributeError:
+                fig = plt.figure(figsize=(6, 7))
+                fig.set_facecolor('white')
+                ax = fig.add_subplot(111, adjustable='box')
+
+        for x, y in self.line_segments:
+            ax.plot([x[0], x[1]], [y[0], y[1]], 'k', linewidth=linewidth)  
+
+        ax.get_xaxis().set_visible(False)
+
+        if title is not None:
+            ax.set_title(title)
+
+        self.axes = ax
+
+
     def plot(self, show_minima=False, show_trees=False, linewidth=0.5, axes=None,
              title=None):
         """draw the disconnectivity graph using matplotlib
