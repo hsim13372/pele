@@ -539,6 +539,8 @@ class Database(object):
         
     def __init__(self, db=":memory:", accuracy=1e-3, connect_string='sqlite:///%s',
                  compareMinima=None, createdb=True):
+
+        self.db_name = db
         self.accuracy=accuracy
         self.compareMinima = compareMinima
 
@@ -877,7 +879,7 @@ class Database(object):
             if self.compareMinima: # misleading because not minima...
                 if self.compareMinima(new, m): 
                     m.freq_counter += 1
-            self.lock.release()
+            #self.lock.release()
             return m
         
         self.session.add(new)
