@@ -349,12 +349,13 @@ class SaddlePoint(Base):
     cond_num = Column(Float)
     freq_counter = Column(Integer)
 
-    def __init__(self, energy, coords, eigvalues, eq_tolerance=1e-12, freq_counter=0):
+    def __init__(self, energy, coords, eigvalues, order=None, eq_tolerance=1e-12, freq_counter=0):
         self.energy = energy
         self.coords = np.copy(coords)
         self.eq_tolerance = eq_tolerance
         self.eigvalues = np.copy(eigvalues)
-        self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < self.eq_tolerance)
+        #self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < -self.eq_tolerance)
+        self.order = order
         self.cond_num = np.log10(abs(np.max(self.eigvalues))/abs(np.min(self.eigvalues)))
         self.freq_counter = freq_counter
 
@@ -848,7 +849,7 @@ class Database(object):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
 
-    def addSaddlePoint(self, E, coords, eigvalues, freq_counter=0, eq_tolerance=1e-12, commit=True):
+    def addSaddlePoint(self, E, coords, eigvalues, freq_counter=0, order=None, eq_tolerance=1e-12, commit=True):
         """Add transition state object
         
         Parameters
@@ -873,7 +874,7 @@ class Database(object):
             options(undefer("coords")).\
             filter(SaddlePoint.energy.between(E-self.accuracy, E+self.accuracy))
         
-        new = SaddlePoint(E, coords, eigvalues, eq_tolerance, freq_counter=freq_counter)
+        new = SaddlePoint(E, coords, eigvalues, order=order, eq_tolerance=eq_tolerance, freq_counter=freq_counter)
 
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
