@@ -86,7 +86,7 @@ class Minimum(Base):
     freq_counter = Column(Integer)
 
 
-    def __init__(self, energy, coords, eigvalues=None, freq_counter=0):
+    def __init__(self, energy, coords, eigvalues=None, freq_counter=1):
         self.energy = energy
         self.coords = np.copy(coords)
         self.invalid = False
@@ -152,7 +152,7 @@ class Maximum(Base):
     '''eigvalues of the hessian at maximum'''
     freq_counter = Column(Integer)
     
-    def __init__(self, energy, coords, eigvalues, freq_counter=0):
+    def __init__(self, energy, coords, eigvalues, freq_counter=1):
         self.energy = energy
         self.coords = np.copy(coords)
         self.eigvalues = np.copy(eigvalues)
@@ -349,7 +349,7 @@ class SaddlePoint(Base):
     cond_num = Column(Float)
     freq_counter = Column(Integer)
 
-    def __init__(self, energy, coords, eigvalues, order=None, eq_tolerance=1e-12, freq_counter=0):
+    def __init__(self, energy, coords, eigvalues, order=None, eq_tolerance=1e-12, freq_counter=1):
         self.energy = energy
         self.coords = np.copy(coords)
         self.eq_tolerance = eq_tolerance
@@ -641,7 +641,7 @@ class Database(object):
             return m
         return None
         
-    def addMinimum(self, E, coords, eigvalues=None, freq_counter=0, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
+    def addMinimum(self, E, coords, eigvalues=None, freq_counter=1, commit=True, max_n_minima=-1, pgorder=None, fvib=None):
         """add a new minimum to database
         
         Parameters
@@ -712,7 +712,7 @@ class Database(object):
         """return the minimum with a given id"""
         return self.session.query(Minimum).get(mid)
 
-    def addMaximum(self, E, coords, eigvalues, freq_counter=0, commit=True):
+    def addMaximum(self, E, coords, eigvalues, freq_counter=1, commit=True):
         """add a new maximum to database
         
         Parameters
@@ -849,7 +849,7 @@ class Database(object):
         """return the transition state with id id_"""
         return self.session.query(TransitionState).get(id_)
 
-    def addSaddlePoint(self, E, coords, eigvalues, freq_counter=0, order=None, eq_tolerance=1e-12, commit=True):
+    def addSaddlePoint(self, E, coords, eigvalues, freq_counter=1, order=None, eq_tolerance=1e-12, commit=True):
         """Add transition state object
         
         Parameters
