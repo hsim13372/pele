@@ -104,6 +104,10 @@ class BasinHopping(MonteCarlo):
         # take step
         #########################################################################
         self.takeStep.takeStep(self.coords_after_step, driver=self)
+        
+        # # hannahsim: to check
+        # if self.stepnum % self.printfrq == 0:
+        #     print "Took step to : ", self.coords_after_step
 
         #########################################################################
         # quench
@@ -114,6 +118,12 @@ class BasinHopping(MonteCarlo):
 #            res = res[4]
         self.trial_coords = res.coords
         self.trial_energy = res.energy
+
+        # # hannahsim: to check
+        # if self.stepnum % self.printfrq == 0:
+        #     print "local quench coords:", self.trial_coords
+        #     print "local quench energy:", self.trial_energy
+        
         self.rms = res.rms
         self.funcalls = res.nfev
 
