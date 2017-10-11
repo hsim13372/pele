@@ -15,7 +15,7 @@ from sqlalchemy.schema import Index
 
 from pele.utils.events import Signal
 
-__all__ = ["Minimum", "Maximum", "SaddlePoint", "TransitionState", "Database"]
+__all__ = ["Minimum", "Maximum", "SaddlePoint", "CritPoint", "TransitionState", "Database"]
 
 _schema_version = 2
 verbose=False
@@ -364,6 +364,64 @@ class SaddlePoint(Base):
         return self._id
 
 
+class CritPoint(Base):
+    """Critical Point Class
+
+    The CritPoint class represents a class of critical points that were not
+    able to be classified. Specifically, these contain at least one zero hessian
+    eigenvalues, which translates to us not knowing which specific critical points
+    they actually are. Nevertheless, they are critical points one could get trapped in.
+
+    Implemented by hannahsim (may not work...)
+
+    Parameters
+    ----------
+    energy : float
+    coords : numpy array
+        coordinates of saddle poit
+    eigvalues : 
+        eigenvalues of the numerical hessian at critical point coordinates
+
+    Attributes
+    ----------
+    energy :
+        The energy of the critical point
+    coords :
+        The coordinates of the critical. This is stored as a pickled numpy
+        array which SQL interprets as a BLOB.
+    order :
+        The order associated with the critical point 
+        i.e. number of negative eigenvalues of Hessian. (Not sure if this will be useful)
+    eigenvals :
+        The eigenvalues of the hessian.
+
+    Notes
+    -----
+    Use Database.addCritPoint to create a CritPoint object.
+    """
+    __tablename__ = "tbl_crit_points"
+    _id = Column(Integer, primary_key=True)
+    energy = Column(Float)
+    eq_tolerance = Column(Float)
+    coords = deferred(Column(PickleType))
+    eigvalues = deferred(Column(PickleType))
+    order = Column(Integer)
+    freq_counter = Column(Integer)
+
+    def __init__(self, energy, coords, eigvalues, order=None, eq_tolerance=1e-12, freq_counter=1):
+        self.energy = energy
+        self.coords = np.copy(coords)
+        self.eq_tolerance = eq_tolerance
+        self.eigvalues = np.copy(eigvalues)
+        #self.order = sum(1 for eigvalue in self.eigvalues if eigvalue < -self.eq_tolerance)
+        self.order = order
+        self.freq_counter = freq_counter
+
+    def id(self):
+        """return the sql id of the object"""
+        return self._id
+
+
 class SystemProperty(Base):
     """table to hold system properties like potential parameters and number of atoms
     
@@ -570,8 +628,8 @@ class Database(object):
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
         
-        # these functions will be called when a minimum, maximum, transition state, or 
-        # saddle point is added or removed
+        # these functions will be called when a minimum, maximum, transition state, 
+        # saddle point, or critical point is added or removed
         self.on_minimum_added = Signal()
         self.on_minimum_removed = Signal()
         self.on_maximum_added = Signal()
@@ -580,6 +638,8 @@ class Database(object):
         self.on_ts_removed = Signal()
         self.on_sp_added = Signal()
         self.on_sp_removed = Signal()
+        self.on_cp_added = Signal()
+        self.on_cp_removed = Signal()
         
         self.lock = threading.Lock()
         self.connection = self.engine.connect()
@@ -612,7 +672,6 @@ class Database(object):
         if _schema_version != schema:
             raise IOError("database schema outdated, current (newest) version: "
                           "%d (%d). Please use migrate_db.py in pele/scripts to update database"%(schema, _schema_version))
-
 
     def _highest_energy_minimum(self):
         """return the minimum with the highest energy"""
@@ -894,6 +953,52 @@ class Database(object):
         """return the saddle point with id id_"""
         return self.session.query(SaddlePoint).get(id_)
 
+
+    def addCritPoint(self, E, coords, eigvalues, freq_counter=1, order=None, eq_tolerance=1e-12, commit=True):
+        """Add transition state object
+        
+        Parameters
+        ----------
+        E : float
+            energy of saddle point
+        coords : numpy array
+            coordinates of saddle point
+        eigvalues : numpy array
+            eigvalues of numerical hessian at saddle point coords
+        eq_tolerance : float
+            value to consider zero
+        commit : bool
+            commit changes to sql database
+        
+        Returns
+        -------
+        sp : SaddlePoint
+            the saddle point object (not necessarily new)
+        """
+        candidates = self.session.query(CritPoint).\
+            options(undefer("coords")).\
+            filter(CritPoint.energy.between(E-self.accuracy, E+self.accuracy))
+        
+        new = CritPoint(E, coords, eigvalues, order=order, eq_tolerance=eq_tolerance, freq_counter=freq_counter)
+
+        for m in candidates:
+            if self.compareMinima: # misleading because not minima...
+                if self.compareMinima(new, m): 
+                    m.freq_counter += 1
+            #self.lock.release()
+            return m
+
+        self.session.add(new)
+        if commit:
+            self.session.commit()
+        self.on_cp_added(new)
+        return new
+
+
+    def getCritPointFromID(self, id_):
+        """return the critical point with id id_"""
+        return self.session.query(CritPoint).get(id_)
+
     
     def minima(self, order_energy=True):
         """return an iterator over all minima in database
@@ -932,12 +1037,20 @@ class Database(object):
             return self.session.query(TransitionState).all()
 
     def saddle_points(self, order_energy=False):
-        """return an iterator over all saddle point in database
+        """return an iterator over all saddle points in database
         """
         if order_energy:
             return self.session.query(SaddlePoint).order_by(SaddlePoint.energy).all()
         else:
             return self.session.query(SaddlePoint).all()
+
+    def crit_points(self, order_energy=False):
+        """return an iterator over all critical points in database
+        """
+        if order_energy:
+            return self.session.query(CritPoint).order_by(CritPoint.energy).all()
+        else:
+            return self.session.query(CritPoint).all()
     
     def minimum_adder(self, Ecut=None, max_n_minima=None, commit_interval=1):
         """wrapper class to add minima
@@ -1038,6 +1151,14 @@ class Database(object):
         if commit:
             self.session.commit()
 
+    def remove_crit_point(self, cp, commit=True):
+        """remove a critical point from the database
+        """
+        self.on_cp_removed(cp)
+        self.session.delete(cp)
+        if commit:
+            self.session.commit()
+
     def number_of_minima(self):
         """return the number of minima in the database
         
@@ -1071,6 +1192,11 @@ class Database(object):
         """return the number of saddle points in the database
         """
         return self.session.query(SaddlePoint).count()
+
+    def number_of_crit_points(self):
+        """return the number of critical points in the database
+        """
+        return self.session.query(CritPoint).count()
 
     def get_property(self, property_name):
         """return the minimum with a given name"""
