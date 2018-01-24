@@ -736,7 +736,8 @@ class Database(object):
         for m in candidates:
             if self.compareMinima: # if callable given
                 if self.compareMinima(new, m): # if 2 minima equivalent
-                    m.freq_counter += 1
+                    #m.freq_counter += 1
+                    m.freq_counter += new.freq_counter
                     #self.session.commit()
                 if not self.compareMinima(new, m):
                     continue
@@ -802,7 +803,10 @@ class Database(object):
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
                 if self.compareMinima(new, m): 
-                    m.freq_counter += 1
+                    #m.freq_counter += 1
+                    m.freq_counter += new.freq_counter
+                if not self.compareMinima(new, m):
+                    continue 
             self.lock.release()
             return m
 
@@ -938,8 +942,11 @@ class Database(object):
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
                 if self.compareMinima(new, m): 
-                    m.freq_counter += 1
-            #self.lock.release()
+                    #m.freq_counter += 1
+                    m.freq_counter += new.freq_counter
+                if not self.compareMinima(new, m):
+                    continue
+            self.lock.release()
             return m
         
         self.session.add(new)
@@ -983,9 +990,12 @@ class Database(object):
 
         for m in candidates:
             if self.compareMinima: # misleading because not minima...
-                if self.compareMinima(new, m): 
-                    m.freq_counter += 1
-            #self.lock.release()
+                if self.compareMinima(new, m):
+                    #m.freq_counter += 1
+                    m.freq_counter += new.freq_counter
+                if not self.compareMinima(new, m):
+                    continue
+            self.lock.release()
             return m
 
         self.session.add(new)
